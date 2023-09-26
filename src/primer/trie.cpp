@@ -88,7 +88,9 @@ auto Trie::Put(std::string_view key, T value) const -> Trie {
   // 检查当前的new_cur是不是值节点
   //如果是的话用value覆盖；如果不是的话，修改为值节点，值为value
   if (new_cur->is_value_node_) {
-    new_cur->value_ = std::move(value);
+    // 转换为值节点
+    auto node = dynamic_cast<const TrieNodeWithValue<T> *>(new_cur.get());
+    new_cur = std::make_shared<TrieNodeWithValue<T>>(new_cur->children_, std::make_shared<T>(std::move(value)));
   } else {
     new_cur = std::make_shared<TrieNodeWithValue<T>>(new_cur->children_, std::make_shared<T>(std::move(value)));
   }
