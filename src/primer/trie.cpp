@@ -65,15 +65,10 @@ auto Trie::Put(std::string_view key, T value) const -> Trie {
       std::shared_ptr<TrieNode> new_child = cur->children_.at(c)->Clone();
       // 如果new_child是数值节点，还要拷贝值信息
       if (new_child->is_value_node_) {
-        auto node = dynamic_cast<const TrieNodeWithValue<T> *>(new_child.get()); // 用dynamic_cast将new_child转换为TrieNodeWithValue<T>类型
-        node->value_ = new_child->value_->value_; // 将new_child的值信息拷贝到node中
-
-        // 将new_cur->children_声明为非const的std::map，以便可以修改它
-        std::map<char, std::shared_ptr<const bustub::TrieNode>> &children = new_cur->children_;
-
-        // 创建一个pair并插入到children中
-        children.insert(std::make_pair(c, std::shared_ptr<const bustub::TrieNode>(node)));
-
+        auto node = dynamic_cast<const TrieNodeWithValue<T> *>(new_child.get());
+        new_child = std::make_shared<TrieNodeWithValue<T>>(new_child->children_, std::make_shared<T>(*node->value_));
+        // 插入
+        new_cur->children_.insert(std::make_pair(c, new_child));
       }
       else{
         // 插入
