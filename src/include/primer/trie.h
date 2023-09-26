@@ -47,6 +47,8 @@ class TrieNode {
   TrieNode() = default;
 
   // Create a TrieNode with some children.
+  // explicit是为了防止隐式转换
+  // 这里使用std::move是为了避免拷贝，因为children_是一个map，拷贝map的开销很大
   explicit TrieNode(std::map<char, std::shared_ptr<const TrieNode>> children) : children_(std::move(children)) {}
 
   virtual ~TrieNode() = default;
