@@ -6,26 +6,29 @@ namespace bustub {
 
 template <class T>
 auto Trie::Get(std::string_view key) const -> const T * {
-//  throw NotImplementedException("Trie::Get is not implemented.");
-
-  // You should walk through the trie to find the node corresponding to the key. If the node doesn't exist, return
-  // nullptr. After you find the node, you should use `dynamic_cast` to cast it to `const TrieNodeWithValue<T> *`. If
-  // dynamic_cast returns `nullptr`, it means the type of the value is mismatched, and you should return nullptr.
-  // Otherwise, return the value.
   // 创建一个指针指向根节点
-  std::shared_ptr<const TrieNode> cur = root_;
+  auto cur = root_;
+  if (root_ == nullptr) {
+    return nullptr;
+  }
   // 遍历key
   for (auto c : key) {
+    // std::cout<<c<<std::endl;
     // 如果当前节点的孩子中没有c，说明key不存在
     if (cur->children_.find(c) == cur->children_.end()) {
       return nullptr;
     }
+
     // 否则，将当前节点指向c对应的孩子
     cur = cur->children_.at(c);
   }
   // 如果当前节点是值节点，返回值
   if (cur->is_value_node_) {
     auto node = dynamic_cast<const TrieNodeWithValue<T> *>(cur.get());
+    // T and the type of the value doesn't match
+    if (node == nullptr) {
+      return nullptr;
+    }
     return node->value_.get();
   }
   return nullptr;
@@ -33,75 +36,80 @@ auto Trie::Get(std::string_view key) const -> const T * {
 
 template <class T>
 auto Trie::Put(std::string_view key, T value) const -> Trie {
-  // Note that `T` might be a non-copyable type. Always use `std::move` when creating `shared_ptr` on that value.
-  //  throw NotImplementedException("Trie::Put is not implemented.");
-
-  // You should walk through the trie and create new nodes if necessary. If the node corresponding to the key already
-  // exists, you should create a new `TrieNodeWithValue`.
-  //-------------------------------------------------------------------------
-  // 创建一个新的Trie和一个指针指向这个新Trie根节点的共享指针
   Trie new_trie;
-  std::shared_ptr<const TrieNode> new_cur = new_trie.root_;
-  // 初始化new_trie的根节点
-  if (new_cur == nullptr) {
-    new_cur = std::make_shared<TrieNode>();
-  }
-  // 创建一个指针指向根节点
-  std::shared_ptr<const TrieNode> cur = root_;
-  // 判断是不是要新创建节点：0表示不创建，1表示创建
-  int flag = 0;
-  //-------------------------------------------------------------------------
-  // 遍历key
+  auto val_ptr = std::make_shared<T>(std::move(value));
+  auto new_cur = root_ ? root_->Clone() : std::make_shared<TrieNode>();
+  std::shared_ptr<TrieNode> parent;
+  new_trie.root_ = new_cur;
+
   for (auto c : key) {
-    // 如果当前节点的孩子中没有c，说明key不存在
-    if (flag||cur->children_.find(c) == cur->children_.end()) {
-      // 创建一个新的孩子节点
-      std::shared_ptr<TrieNode> new_child = std::make_shared<TrieNode>();
-      // 将新孩子节点加入到new_cur的孩子中
-      new_cur->children_.insert(std::make_pair(c, new_child));
-      flag=1;
+    auto &children = new_cur->children_;
+    if (children.find(c) != children.end()) {
+      parent = new_cur;
+      auto new_node = std::shared_ptr<TrieNode>(children[c]->Clone());
+      children[c] = new_node;
+      new_cur = new_node;
     } else {
-      // 拷贝cur指向c对应的孩子节点
-      std::shared_ptr<TrieNode> new_child = cur->children_.at(c)->Clone();
-      // 如果new_child是数值节点，还要拷贝值信息
-      if (new_child->is_value_node_) {
-        auto node = dynamic_cast<const TrieNodeWithValue<T> *>(new_child.get());
-        new_child = std::make_shared<TrieNodeWithValue<T>>(new_child->children_, std::make_shared<T>(*node->value_));
-        // 插入
-        new_cur->children_.insert(std::make_pair(c, new_child));
-      }
-      else{
-        // 插入
-        new_cur->children_.insert(std::make_pair(c, new_child));
-      }
+      parent = new_cur;
+      auto new_node = std::make_shared<TrieNode>();
+      children[c] = new_node;
+      new_cur = new_node;
     }
-    // 把cur除了孩子节点外的其他孩子指针都拷贝到new_cur中
-    for (auto &child : cur->children_) {
-      if (child.first != c) {
-        new_cur->children_.insert(std::make_pair(child.first, child.second));
-      }
-    }
-    // 移动cur和new_cur
-    if(!flag)cur = cur->children_.at(c);
-    new_cur = new_cur->children_.at(c);
   }
-  // 检查当前的new_cur是不是值节点
-  //如果是的话用value覆盖；如果不是的话，修改为值节点，值为value
-  if (new_cur->is_value_node_) {
-    new_cur->value_ = std::move(value);
+  if (!key.empty()) {
+    auto ch = key.back();
+    parent->children_[ch] = std::make_shared<TrieNodeWithValue<T>>(std::move(new_cur->children_), std::move(val_ptr));
   } else {
-    new_cur = std::make_shared<TrieNodeWithValue<T>>(new_cur->children_, std::make_shared<T>(std::move(value)));
+    new_trie.root_ = std::make_shared<TrieNodeWithValue<T>>(std::move(new_cur->children_), std::move(val_ptr));
   }
-  //-------------------------------------------------------------------------
-  // 返回新建立的Trie
   return new_trie;
 }
 
 auto Trie::Remove(std::string_view key) const -> Trie {
-  throw NotImplementedException("Trie::Remove is not implemented.");
+  Trie new_trie;
+  auto cur = root_;
+  new_trie.root_ = cur;
+  // record the path
+  std::vector<std::shared_ptr<TrieNode>> vec;
 
-  // You should walk through the trie and remove nodes if necessary. If the node doesn't contain a value any more,
-  // you should convert it to `TrieNode`. If a node doesn't have children any more, you should remove it.
+  // Step 1: Create the vec
+  for (auto c : key) {
+    if (cur->children_.find(c) != cur->children_.end()) {
+      vec.push_back(cur->Clone());
+      cur = cur->children_.at(c);
+    } else {
+      return new_trie;  // can't find the key
+    }
+  }
+  vec.push_back(cur->Clone());
+  // Step 2: Connect the vec
+  for (int i = 0; i < static_cast<int>(vec.size()) - 1; i++) {
+    vec[i]->children_[key[i]] = vec[i + 1];
+  }
+  new_trie.root_ = vec[0];
+  // Step 3: Remove the TrieNode
+  bool flag;
+  if (!vec.back()->children_.empty()) {
+    // TODO(Tang): should change type
+    auto node = std::make_shared<TrieNode>();
+    node->children_ = vec.back()->children_;
+    vec[static_cast<int>(vec.size()) - 2]->children_[key[static_cast<int>(key.size()) - 1]] = node;
+    flag = false;
+  } else {
+    flag = true;
+  }
+  for (int i = key.size() - 1; i >= 0; i--) {
+    if (flag && vec[i]->children_.size() == 1) {
+      vec[i]->children_.erase(key[i]);
+      if (vec[i]->is_value_node_) {
+        flag = false;
+      }
+    } else if (flag) {
+      vec[i]->children_.erase(key[i]);
+      flag = false;
+    }
+  }
+  return new_trie;
 }
 
 // Below are explicit instantiation of template functions.
