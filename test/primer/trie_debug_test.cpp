@@ -19,11 +19,11 @@ TEST(TrieDebugger, TestCase) {
   std::uniform_int_distribution<uint32_t> dis(0, 100);
 
   auto trie = Trie();
-//  for (uint32_t i = 0; i < 10; i++) {
-//    std::string key = fmt::format("{}", dis(gen));
-//    auto value = dis(gen);
-//    trie = trie.Put<uint32_t>(key, value);
-//  }
+  //  for (uint32_t i = 0; i < 10; i++) {
+  //    std::string key = fmt::format("{}", dis(gen));
+  //    auto value = dis(gen);
+  //    trie = trie.Put<uint32_t>(key, value);
+  //  }
   trie = trie.Put<uint32_t>("65", 25);
   trie = trie.Put<uint32_t>("61", 65);
   trie = trie.Put<uint32_t>("82", 84);
