@@ -74,6 +74,14 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   auto ValueAt(int index) const -> ValueType;
 
   /**
+   *
+   * @param key
+   * @param key_comparator
+   * @return
+   */
+  auto KeyIndex(const KeyType &key, const KeyComparator &key_comparator) const -> int;
+
+  /**
    * @brief For test only, return a string representing all keys in
    * this internal page, formatted as "(key1,key2,key3,...)"
    *
@@ -98,7 +106,12 @@ class BPlusTreeInternalPage : public BPlusTreePage {
 
     return kstr;
   }
-
+  void SetValueAt(int index, const ValueType &value);
+  void ReduceToHalf(bool smaller);
+  void InsertAtBack(const KeyType &key, const ValueType &value);
+  void InsertAtBack(const MappingType &pair);
+  void InsertAtFront(const MappingType &pair);
+  void InsertValue(const KeyType &key, const ValueType &value, const KeyComparator &comparator);
  private:
   // Flexible array member for page data.
   MappingType array_[0];

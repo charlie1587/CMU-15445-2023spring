@@ -26,7 +26,12 @@ BPLUSTREE_TYPE::BPlusTree(std::string name, page_id_t header_page_id, BufferPool
  * Helper function to decide whether current b+tree is empty
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::IsEmpty() const -> bool { return true; }
+auto BPLUSTREE_TYPE::IsEmpty() const -> bool {
+  // Check whether the root page is empty
+  ReadPageGuard guard = bpm_->FetchPageRead(header_page_id_);
+  auto root_page = guard.As<BPlusTreeHeaderPage>();
+  return root_page->root_page_id_ == INVALID_PAGE_ID;
+}
 /*****************************************************************************
  * SEARCH
  *****************************************************************************/
@@ -38,8 +43,35 @@ auto BPLUSTREE_TYPE::IsEmpty() const -> bool { return true; }
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result, Transaction *txn) -> bool {
   // Declaration of context instance.
-  Context ctx;
-  (void)ctx;
+  // Context ctx;
+  // (void)ctx;
+  if (IsEmpty()) {
+    return false;
+  }
+  // Get the root
+  std::optional<ReadPageGuard> root_guard = bpm_->FetchPageRead(header_page_id_);
+  auto root_page = root_guard->As<BPlusTreeHeaderPage>();
+  int root_page_id = root_page->root_page_id_;
+
+  ReadPageGuard node_guard = bpm_->FetchPageRead(root_page_id);
+  root_guard = std::nullopt;  // release head
+
+  auto node = node_guard.As<BPlusTreePage>();
+  while (!node->IsLeafPage()) {
+    auto inner_node = node_guard.As<InternalPage>();
+    int next_id = inner_node->KeyIndex(key, comparator_);
+    page_id_t next_page_id = inner_node->ValueAt(next_id);
+    node_guard = bpm_->FetchPageRead(next_page_id);
+    node = node_guard.As<BPlusTreePage>();
+  }
+
+  auto leaf = node_guard.As<LeafPage>();
+  ValueType tmp_result;
+  if (leaf->GetValue(key, &tmp_result, comparator_)) {
+    result->push_back(tmp_result);
+    return true;
+  }
+
   return false;
 }
 
@@ -56,9 +88,188 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transaction *txn) -> bool {
   // Declaration of context instance.
+//  Context ctx;
+//  (void)ctx;
+//  return false;
+  if (IsEmpty()) {
+    WritePageGuard header_guard = bpm_->FetchPageWrite(header_page_id_);
+
+    page_id_t root_page_id;
+
+    auto new_root_page = reinterpret_cast<LeafPage *>(bpm_->NewPage(&root_page_id)->GetData());
+
+    //    loginfo = "Thread " + std::to_string(pthread_self()) + ":New leaf page with id " +
+    //    std::to_string(root_page_id); LOG_DEBUG("%s", loginfo.c_str());
+
+    new_root_page->Init(leaf_max_size_);
+    //    new_root_page->InsertValue(key, value, comparator_);
+    new_root_page->InsertAtBack(key, value);
+    auto header = header_guard.AsMut<BPlusTreeHeaderPage>();
+    header->root_page_id_ = root_page_id;
+    return true;
+  }
+
+  // Declaration of context instance.
   Context ctx;
-  (void)ctx;
-  return false;
+  //  (void)ctx;
+  WritePageGuard guard = bpm_->FetchPageWrite(header_page_id_);
+  ctx.header_page_.emplace(std::move(guard));
+
+  page_id_t root_page_id;
+
+  std::vector<int> inner_ids;
+  auto header = ctx.header_page_->As<BPlusTreeHeaderPage>();
+  root_page_id = header->root_page_id_;
+
+  ctx.write_set_.push_back(bpm_->FetchPageWrite(root_page_id));
+  auto cur_page = ctx.write_set_.back().As<BPlusTreePage>();
+  while (!cur_page->IsLeafPage()) {
+    auto inner_page = ctx.write_set_.back().As<InternalPage>();
+    int next_id = inner_page->KeyIndex(key, comparator_);
+    inner_ids.push_back(next_id);
+    int next_page_id = inner_page->ValueAt(next_id);
+    guard = bpm_->FetchPageWrite(next_page_id);
+    cur_page = guard.As<BPlusTreePage>();
+    ctx.write_set_.emplace_back(std::move(guard));
+  }
+
+  auto detect_page = ctx.write_set_.back().As<LeafPage>();
+  ValueType dummy_value;
+  if (detect_page->GetValue(key, &dummy_value, comparator_)) {
+    return false;  // The key already exist
+  }
+
+  // count which pages need modification
+  int modification_count = 1;
+  // whether leaf page need split
+  bool need_split = cur_page->GetSize() + 1 == cur_page->GetMaxSize();
+
+  // internal pages
+  for (int i = ctx.write_set_.size() - 2; i >= 0 && need_split; --i) {
+    ++modification_count;
+    auto page = ctx.write_set_[i].As<BPlusTreePage>();
+    need_split = page->GetSize() == page->GetMaxSize();
+  }
+
+  bool root_change_flag = need_split && (modification_count == static_cast<int>(ctx.write_set_.size()));
+
+  if (!root_change_flag) {
+    ctx.header_page_ = std::nullopt;
+  }
+
+  int release_count = ctx.write_set_.size() - modification_count;
+  while (release_count > 0) {
+    ctx.write_set_.pop_front();
+    --release_count;
+  }
+
+  // handle leaf page
+  auto leaf_page = ctx.write_set_.back().AsMut<LeafPage>();
+  leaf_page->InsertValue(key, value, comparator_);
+  KeyType next_insert_key;
+  page_id_t next_insert_value;
+  if (leaf_page->GetSize() == leaf_page->GetMaxSize()) {
+    int max_size = leaf_page->GetMaxSize();
+    int split_id = max_size / 2;
+    page_id_t new_page_id = INVALID_PAGE_ID;
+    auto new_leaf_page = reinterpret_cast<LeafPage *>(bpm_->NewPage(&new_page_id)->GetData());
+
+    //    loginfo = "Thread " + std::to_string(pthread_self()) + ":New leaf page with id " +
+    //    std::to_string(new_page_id); LOG_DEBUG("%s", loginfo.c_str());
+
+    new_leaf_page->Init(leaf_max_size_);
+    new_leaf_page->SetNextPageId(leaf_page->GetNextPageId());
+    leaf_page->SetNextPageId(new_page_id);
+    for (int i = split_id; i < max_size; ++i) {
+      new_leaf_page->InsertAtBack(leaf_page->KeyAt(i), leaf_page->ValueAt(i));
+    }
+    leaf_page->ReduceToHalf();
+    next_insert_key = new_leaf_page->KeyAt(0);
+    next_insert_value = new_page_id;
+    bpm_->UnpinPage(new_page_id, true);
+  }
+  ctx.write_set_.pop_back();
+
+  // handle internal page
+  while (!ctx.write_set_.empty()) {
+    auto inner_page = ctx.write_set_.back().AsMut<InternalPage>();
+    KeyType insert_key = next_insert_key;
+    page_id_t insert_value = next_insert_value;
+    // split internal page
+    if (inner_page->GetSize() == inner_page->GetMaxSize()) {
+      int to_insert_id = inner_page->KeyIndex(insert_key, comparator_) + 1;
+      int max_size = inner_page->GetMaxSize();
+      int split_id = (max_size + 1) / 2;  // first id on the higher half
+      bool insert_to_lower = false;       // new pair insert to lower half
+      bool insert_is_lift = true;         // new key are lifted
+
+      int right_first_insert_id = split_id;  // just initialize
+      KeyType lift_key = next_insert_key;    // just initialize
+      auto lift_value = next_insert_value;
+      if (to_insert_id < split_id) {
+        lift_key = inner_page->KeyAt(split_id - 1);
+        lift_value = inner_page->ValueAt(split_id - 1);
+        //        right_first_insert_id == split_id; //useless as already set the same value
+        insert_is_lift = false;
+        insert_to_lower = true;
+      } else if (to_insert_id > split_id) {
+        right_first_insert_id = split_id + 1;
+        lift_key = inner_page->KeyAt(split_id);
+        lift_value = inner_page->ValueAt(split_id);
+        insert_is_lift = false;
+      }
+
+      page_id_t new_page_id = INVALID_PAGE_ID;
+      auto new_inner_page = reinterpret_cast<InternalPage *>(bpm_->NewPage(&new_page_id)->GetData());
+
+      //      loginfo =
+      //          "Thread " + std::to_string(pthread_self()) + ":New internal page with id " +
+      //          std::to_string(new_page_id);
+      //      LOG_DEBUG("%s", loginfo.c_str());
+
+      new_inner_page->Init(internal_max_size_);
+      new_inner_page->SetKeyAt(0, lift_key);  // for remove operation
+      new_inner_page->SetValueAt(0, lift_value);
+      for (int i = right_first_insert_id; i < max_size; ++i) {
+        new_inner_page->InsertAtBack(inner_page->KeyAt(i), inner_page->ValueAt(i));
+      }
+      inner_page->ReduceToHalf(insert_to_lower);
+      if (!insert_is_lift) {
+        if (insert_to_lower) {
+          inner_page->InsertValue(insert_key, insert_value, comparator_);
+        } else {
+          new_inner_page->InsertValue(insert_key, insert_value, comparator_);
+        }
+      }
+
+      bpm_->UnpinPage(new_page_id, true);
+      next_insert_key = lift_key;
+      next_insert_value = new_page_id;
+    } else {
+      inner_page->InsertValue(insert_key, insert_value, comparator_);
+    }
+    ctx.write_set_.pop_back();
+  }
+
+  // root is splited
+  if (root_change_flag) {
+    page_id_t new_page_id = INVALID_PAGE_ID;
+    auto new_page = reinterpret_cast<InternalPage *>(bpm_->NewPage(&new_page_id)->GetData());
+
+    //    loginfo = "Thread " + std::to_string(pthread_self()) + ":New internal page with id " +
+    //    std::to_string(new_page_id); LOG_DEBUG("%s", loginfo.c_str());
+
+    new_page->Init(internal_max_size_);
+    auto head_page = ctx.header_page_->AsMut<BPlusTreeHeaderPage>();
+    page_id_t old_root_page_id = head_page->root_page_id_;
+    head_page->root_page_id_ = new_page_id;
+    new_page->SetValueAt(
+        0, old_root_page_id);  // key head is invalid hear. As it always at leftmost, it doesn't affect merge operation.
+    new_page->InsertAtBack(next_insert_key, next_insert_value);
+    bpm_->UnpinPage(new_page_id, true);
+  }
+
+  return true;
 }
 
 /*****************************************************************************
